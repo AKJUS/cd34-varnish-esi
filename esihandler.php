@@ -1,7 +1,6 @@
 <?php
-// Version: 0.9.1b
-  $cwd = getcwd();
-  $path = substr($cwd,0,strpos($cwd,'wp-content/'));
-  require($path . 'wp-blog-header.php');
-  dynamic_sidebar ('ESI Widget Sidebar');
-?>
+// ESI handler — loaded via Varnish ESI include to render the cached sidebar.
+$path = dirname( __FILE__ );
+$abspath = substr( $path, 0, strpos( $path, 'wp-content' ) );
+require $abspath . 'wp-blog-header.php';
+dynamic_sidebar( 'esi-widget-sidebar' );

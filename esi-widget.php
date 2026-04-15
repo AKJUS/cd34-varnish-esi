@@ -1,117 +1,138 @@
 <?php
 /*
-Plugin Name: Wordpress Varnish ESI Widget
-Plugin URI: http://code.google.com/p/cd34-wordpress/wiki/WordpressVarnishESI
+Plugin Name: WordPress Varnish ESI Widget
+Plugin URI: https://github.com/cd34/cd34-varnish-esi
 Description: Utilize Varnish and cache the sidebar using ESI
 Author: Chris Davies
-Version: 0.2
-Author URI: http://cd34.com/
-
-* selective purge based on site - comment posted, do we need to purge sidebar or frontpage? (only frontpage if # of comments is displayed)
+Version: 0.3
+Author URI: https://cd34.com/
+License: MIT
+License URI: https://opensource.org/licenses/MIT
+Text Domain: varnish-esi-widget
+Requires at least: 5.0
+Requires PHP: 7.4
 */
 
-function widget_esi_control() {
-?>
-<p>
-Place the Widgets in 'ESI Widget Sidebar' and configure as needed.
-</p>
-<?php
+class ESI_Widget extends WP_Widget {
+
+    public function __construct() {
+        parent::__construct(
+            'esi_widget',
+            __( 'ESI Widget', 'varnish-esi-widget' ),
+            array( 'description' => __( 'Renders the ESI Widget Sidebar via Varnish ESI include.', 'varnish-esi-widget' ) )
+        );
+    }
+
+    public function widget( $args, $instance ) {
+        echo $args['before_widget'];
+        ?>
+        <esi:include src="<?php echo esc_url( plugin_dir_url( __FILE__ ) . 'esihandler.php' ); ?>"/>
+        <?php
+        echo $args['after_widget'];
+    }
+
+    public function form( $instance ) {
+        ?>
+        <p><?php esc_html_e( 'Place the Widgets in "ESI Widget Sidebar" and configure as needed.', 'varnish-esi-widget' ); ?></p>
+        <?php
+    }
 }
 
-function widget_esi($args) {
-  echo $before_widget;
-?>
-<esi:include src="<?php echo plugin_dir_url(__FILE__);?>esihandler.php"/>
-<?php
-  echo $after_widget;
-}
-	
-function widget_esi_init() {
-  if ( !function_exists('register_sidebar_widget') ||
-       !function_exists('register_widget_control') ) {
-    return;
-  }
+function esi_widget_register() {
+    register_widget( 'ESI_Widget' );
 
-  register_sidebar_widget('ESI Widget', 'widget_esi');
-  register_widget_control('ESI Widget', 'widget_esi_control');
-
-  if ( function_exists('register_sidebar') ) {
-    register_sidebar(array(
-        'name' => 'ESI Widget Sidebar',
+    register_sidebar( array(
+        'name'          => __( 'ESI Widget Sidebar', 'varnish-esi-widget' ),
+        'id'            => 'esi-widget-sidebar',
         'before_widget' => '<li id="%1$s" class="widget %2$s">',
-        'after_widget' => '</li>',
-        'before_title' => '<h2 class="widgettitle">',
-        'after_title' => '</h2>',
-    ));
-  }
+        'after_widget'  => '</li>',
+        'before_title'  => '<h2 class="widgettitle">',
+        'after_title'   => '</h2>',
+    ) );
 }
 
-function esi_purge($post_id) {
-  $url = parse_url(get_permalink($post_id));
-  _esi_purge($url['host'], $url['path']);
-  _esi_purge(site_url(), plugin_dir_url(__FILE__) + "esihandler.php");
-  _esi_purge(site_url(), '/');
+function esi_purge( $post_id ) {
+    $permalink = get_permalink( $post_id );
+    if ( ! $permalink ) {
+        return;
+    }
+    $url = wp_parse_url( $permalink );
+    _esi_purge( $url['host'], $url['path'] );
+    _esi_purge( wp_parse_url( site_url(), PHP_URL_HOST ), wp_parse_url( plugin_dir_url( __FILE__ ) . 'esihandler.php', PHP_URL_PATH ) );
+    _esi_purge( wp_parse_url( site_url(), PHP_URL_HOST ), '/' );
 }
 
-function _esi_purge($hostname, $uri) {
-  $purgecmd = "BAN $uri HTTP/1.0\nHost: $hostname\n\n";
-
-  $varnish_ips = explode(',', get_option('varnish-esi-servers'));
-  foreach ($varnish_ips as $ip) {
-    $fp = fsockopen(trim($ip), 80, $errno, $errstr, 5);
-    if ($fp) {
-      fwrite($fp, $purgecmd);
-      while (!feof($fp)) {
-          fgets($fp, 4096);
-      }
-      fclose($fp);
-    } //if ($fp) {
-  } // foreach ($varnish_ips as $ip) {
+function esi_purge_comment( $comment_id ) {
+    $comment = get_comment( $comment_id );
+    if ( $comment ) {
+        esi_purge( $comment->comment_post_ID );
+    }
 }
 
-function esi_credits() {
-?>
-<!-- Powered by ESI-Widget -->
-<?php
+function _esi_purge( $hostname, $uri ) {
+    $varnish_ips = explode( ',', get_option( 'varnish-esi-servers', '' ) );
+    foreach ( $varnish_ips as $ip ) {
+        $ip = trim( $ip );
+        if ( empty( $ip ) ) {
+            continue;
+        }
+        wp_remote_request( "http://{$ip}{$uri}", array(
+            'method'  => 'BAN',
+            'headers' => array( 'Host' => $hostname ),
+            'timeout' => 5,
+        ) );
+    }
 }
 
 function esi_widget_menu() {
-  add_options_page('ESI Widget Options', 'Varnish ESI Widget', 'manage_options', 'esi-widget-options', 'esi_widget_options');
+    add_options_page(
+        __( 'ESI Widget Options', 'varnish-esi-widget' ),
+        __( 'Varnish ESI Widget', 'varnish-esi-widget' ),
+        'manage_options',
+        'esi-widget-options',
+        'esi_widget_options'
+    );
 }
 
 function esi_widget_options() {
-    if (!current_user_can('manage_options'))  {
-        wp_die( __('You do not have sufficient permissions to access this page.') );
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( esc_html__( 'You do not have sufficient permissions to access this page.', 'varnish-esi-widget' ) );
     }
-?>
+    ?>
+    <div class="wrap">
+        <h2><?php esc_html_e( 'Varnish ESI Widget Setup', 'varnish-esi-widget' ); ?></h2>
+        <form method="post" action="options.php">
+            <?php settings_fields( 'varnish-esi' ); ?>
+            <?php do_settings_sections( 'varnish-esi' ); ?>
 
-<div class="wrap">
-<h2>Varnish ESI Widget setup</h2>
-<form method="post" action="options.php">
-    <?php settings_fields( 'varnish-esi' ); ?>
+            <table class="form-table">
+                <tr>
+                    <th scope="row">
+                        <label for="varnish-esi-servers"><?php esc_html_e( 'Varnish Server IPs (comma separated)', 'varnish-esi-widget' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text" id="varnish-esi-servers" name="varnish-esi-servers" class="regular-text"
+                               value="<?php echo esc_attr( get_option( 'varnish-esi-servers', '' ) ); ?>" />
+                    </td>
+                </tr>
+            </table>
 
-    <table class="form-table">
-        <tr valign="top">
-        <th scope="row">Varnish Server IPs - comma separated </th>
-        <td><input type="text" name="varnish-esi-servers" value="<?php echo get_option('varnish-esi-servers'); ?>" /></td>
-        </tr>
-    </table>
-
-<p class="submit">
-<input type="submit" class="button-primary" value="<?php _e('Save Changes') ?>" />
-</p>
-</form>
-<?php
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
 }
 
-function esi_widget_init() {
-  register_setting('varnish-esi', 'varnish-esi-servers');
+function esi_widget_settings_init() {
+    register_setting( 'varnish-esi', 'varnish-esi-servers', array(
+        'type'              => 'string',
+        'sanitize_callback' => 'sanitize_text_field',
+    ) );
 }
 
-add_action('init', 'widget_esi_init');
-add_action('edit_post', 'esi_purge');
-add_action('deleted_post', 'esi_purge');
-add_action('wp_footer', 'esi_credits');
-
-add_action('admin_menu', 'esi_widget_menu');
-add_action('admin_init', 'esi_widget_init');
+add_action( 'widgets_init', 'esi_widget_register' );
+add_action( 'edit_post', 'esi_purge' );
+add_action( 'deleted_post', 'esi_purge' );
+add_action( 'comment_post', 'esi_purge_comment' );
+add_action( 'admin_menu', 'esi_widget_menu' );
+add_action( 'admin_init', 'esi_widget_settings_init' );
